@@ -1,0 +1,1220 @@
+######### Install packages (only during first time you run the scripts)
+install.packages("lubridate" )
+install.packages("openxlsx")
+install.packages("ggrepel")
+install.packages("stringr")
+install.packages("vctrs")
+install.packages("tidyverse")
+install.packages("plotly")
+install.packages("ggpubr")
+
+
+### Load libraries
+rm(list=ls(all=TRUE))
+library(tidyverse)
+library(dplyr)
+library(ggplot2)
+library(lubridate)
+library(data.table)
+library(openxlsx)
+library(ggrepel)
+library(scales)
+library(stringr)
+library(ggpubr)
+library(plotly)
+library(openxlsx)
+
+####################
+# You will need to download session info from PPMS and save it. We have too many sessions to save it in one file, so we need to load several and merge them 
+
+setwd("I:/ICT_Software/Software/Rscripts/Usage statistics" )
+usagedata2019<-read.csv("PPMS session info 2019 with dates.csv", sep=",",dec=".") # old versions of PPMS exported as .csv
+usagedata2020<-read.csv("PPMS session info 2020 with dates.csv", sep=",",dec=".")
+usagedata2021<-read.csv("PPMS session info 2021 with dates.csv", sep=",",dec=".")
+usagedata2022<-read.csv("PPMS session info 2022 with dates.csv", sep=",",dec=".")
+usagedata2023<-read.csv("PPMS session info 2023 with dates - 11 Sept.csv", sep=",",dec=".")
+usagedata2023a<-read.xlsx("PPMS session info 2023 with dates 12sept-31 dec.xlsx")
+usagedata2024a<-read.xlsx("PPMS session info 2024 with dates 1jan-31mar.xlsx")
+usagedata2024b<-read.xlsx("PPMS session info 2024 with dates 1apr-30jun.xlsx")
+usagedata2024c<-read.xlsx("PPMS session info 2024 with dates 1jul-1aug.xlsx")
+usagedata2024d<-read.xlsx("PPMS session info 2024 with dates 2 Aug-31 Dec.xlsx")
+usagedata2025a<-read.xlsx("PPMS session info 2025 with dates 1 Jan-31 Mar.xlsx")
+usagedata2025b<-read.xlsx("PPMS session info 2025 with dates 1 apr-30 jun.xlsx")
+usagedata2025c<-read.xlsx("PPMS session info 2025 with dates 1 jul -30 sep.xlsx")
+usagedata2025d<-read.xlsx("PPMS session info 2025 with dates 1 oct -30 nov.xlsx")
+usagedata2025e<-read.xlsx("PPMS session info 2025 with dates 1 dec -31 dec.xlsx")
+usagedata2026a<-read.xlsx("PPMS session info 2026 with dates 1 jan -31 mar.xlsx")
+usagedata2026b<-read.xlsx("PPMS session info 2026 with dates 1 apr -30 jun.xlsx")
+usagedata2026c<-read.xlsx("PPMS session info 2026 with dates 1 jul -31 aug.xlsx")
+
+
+# Merge all data. You can choose to select only one year, month, etc. 
+usagedata<-rbind(usagedata2019,usagedata2020,usagedata2021,usagedata2022,usagedata2023,usagedata2023a,usagedata2024a,usagedata2024b,usagedata2024c,usagedata2024d,usagedata2025a,usagedata2025b,usagedata2025c,usagedata2025d,usagedata2025e,usagedata2026a,usagedata2026b,usagedata2026c)
+
+#### Some sanity checks. Are all systems in there, what does data look like, etc. 
+levels(as.factor(usagedata$System))
+
+usagedata[c(1:200),]
+usagedata[24,]
+
+###Filter irrelevant data, eg. analysis workstations, cancelled sessions, training sessions, etc. 
+usagedata_nocanc<-usagedata %>%
+  filter(Notes!="cancelled" | is.na(Notes) )
+
+usagedata_nocanc_notrain<-usagedata_nocanc %>%
+  filter(SE2.comments!="Training" | is.na(Notes) )
+usagedata_nocanc_notrain<-usagedata_nocanc_notrain %>%
+  filter(SE2.comments!="Training session" | is.na(Notes) )
+#usagedata_nocanc_notrain<-usagedata_nocanc_notrain %>%
+#    filter(Group!="FCF"  )
+usagedata_nocanc_notrain<-usagedata_nocanc_notrain %>% # Filters instruments wich are free to use and not taken into consideration
+  filter(System!="Analysis 1"& System!="Analysis 2" & System!="Analysis 3" & System!="FCS Express - License 1" & System!="Workstation 1"& System!="Workstation 2" & System!="Cytek Cloud Pro License"  )
+usagedata_nocanc_notrain2<-usagedata_nocanc_notrain %>%
+  filter(Amount!=0 | is.na(Notes) ) # Sometimes, during an incident, operators keep session in PPMS, but change cost to 0. 
+
+
+### Make data format readable for R
+dates2<-gsub("/","-",usagedata_nocanc_notrain$Date)
+head(dates2)
+usagedata_nocanc_notrain$Date<-dates2
+
+### Make wide & long data tables with use per day
+usagedataperday_wide<-dcast(as.data.table(usagedata_nocanc_notrain),Date ~ System , value.var="Length.booked", fun.aggregate = sum)
+usagedataperday_long<-melt(usagedataperday_wide, id.vars="Date")
+head(usagedataperday_wide)
+
+
+####################################################################################
+### Check which instrumentsyou have, you may have renamed them, etc. 
+### After this, we perform some data cleanup stept (change names of instruments, etc)
+####################################################################################
+
+levels(as.factor(usagedata_nocanc_notrain$System))
+# Some instruments were renamed during operations, now we make sure the naming is harmonized for those systems. This may not be required for you.
+
+### Change name "Aria 1 (non-assisted sorting)" to "Aria 1"
+usagedataperday_long$variable [usagedataperday_long$variable == "Aria 1 (non-assisted sorting)"] = "Aria 1"
+unique(usagedataperday_long$variable)
+
+
+### Change S8 to FACSDiscover S8
+usagedataperday_long$variable [usagedataperday_long$variable == "S8"] = "FACSDiscover S8"
+unique(usagedataperday_long$variable)
+
+### LX/mosaic88 to LX (
+#Note: the other way around is very cumbersome
+usagedataperday_long$variable [usagedataperday_long$variable == "CytoFLEX LX/mosaic88"] = "CytoFLEX LX"
+unique(usagedataperday_long$variable)
+
+### Remove ESP module from 3L3
+#Note: the other way around is very cumbersome
+usagedataperday_long$variable [usagedataperday_long$variable == "Aurora-3L 3 + ESP module"] = "Aurora-3L 3"
+unique(usagedataperday_long$variable)
+
+
+
+### Re-order Systems to make graphs prettier and data easier to understand. 
+levels(usagedataperday_long$variable)
+usagedataperday_long$variable<-factor(usagedataperday_long$variable,levels=c( "Aria 1" , "Aria 1 (non-assisted sorting)" ,"Aria 2 (non-assisted sorting)", "Aria 3", "S8", "FACSDiscover S8","Aurora CS" , "Cytoflex SRT ML-I", "Cytoflex SRT ML-II",
+                                                                              "Aurora-3L 1", "Aurora-3L 2","Aurora-3L 3","Aurora-5L 1","Aurora-5L 2" ,"Sony 1 (ID7000)" , "Sony 2 (ID7000)","CytoFLEX LX",
+                                                                              "Canto 1" ,"Canto 2 / ML-II","Canto 3" ,"Canto 4", "Fortessa 1" ,"Fortessa 2","LSR-II 1","LSR-II 3","Lyric 1" ,"Lyric 2 / ML-III","Lyric 3","Lyric 4",
+                                                                              "CyTOF XT" , "Helios"  ,"Hyperion 1", "Hyperion 2","COMET","LSR-II 2","Calibur 1", "Calibur 2" ,  "NA")  )
+
+
+
+######## Add week, month, quarter columns to the data to be able to plot on different timespans. 
+
+# Aggregate data by weeks, add as separate column & re-sum per week
+usagedataperday_long$Week <- (cut(dmy(usagedataperday_long$Date),
+                                  breaks = "week",
+                                  start.on.monday = TRUE))
+usagedataperweek_wide<-dcast(as.data.table(usagedataperday_long),Week ~ variable , value.var="value", fun.aggregate = sum)
+usagedataperweek_long<-melt(usagedataperweek_wide, id.vars="Week")
+head(usagedataperday_wide)
+
+# Aggregate data by months, add as separate column & re-sum per month
+usagedataperday_long$month <- (cut(dmy(usagedataperday_long$Date),
+                                  breaks = "month"))
+usagedatapermonth_wide<-dcast(as.data.table(usagedataperday_long),month ~ variable , value.var="value", fun.aggregate = sum)
+usagedatapermonth_long<-melt(usagedatapermonth_wide, id.vars="month")
+head(usagedataperday_wide)
+
+# Aggregate data by years, add as separate column & re-sum per years
+usagedataperday_long$year <- (cut(dmy(usagedataperday_long$Date),
+                                   breaks = "year"))
+usagedataperyear_wide<-dcast(as.data.table(usagedataperday_long),year ~ variable , value.var="value", fun.aggregate = sum)
+usagedataperyear_long<-melt(usagedataperyear_wide, id.vars="year")
+head(usagedataperday_wide)
+
+
+# Aggregate data by quarters, add as separate column & re-sum per years
+usagedataperday_long$quarter <- (cut(dmy(usagedataperday_long$Date),
+                                  breaks = "quarter"))
+usagedataperquarter_wide<-dcast(as.data.table(usagedataperday_long),quarter ~ variable , value.var="value", fun.aggregate = sum)
+usagedataperquarter_long<-melt(usagedataperquarter_wide, id.vars="quarter")
+head(usagedataperquarter_wide)
+
+#### If you want, you can save the resulting data, either in long or wide format
+#write.xlsx(usagedataperweek_wide,"income per instrument per week.xlsx")
+#write.xlsx(usagedataperyear_long,"Usage per instrument per year.xlsx")
+#write.xlsx(usagedataperyear_wide,"Usage per instrument per year wide.xlsx")
+#write.xlsx(usagedatapermonth_wide,"Usage per instrument per month.xlsx")
+
+
+############################################################################################################
+############################################################################################################
+#### Make figure of FCF usage over time per machine
+############################################################################################################
+############################################################################################################
+
+
+### Create a color palette where similar instrument have same color. Order what you defined previously
+
+
+
+my_palette<-c(#"white", This should not be necessary, since the NA's are solved
+  #ccece6",### make a custom palette from C colour brewer
+              "springgreen1", #Aria 1
+              "springgreen2",
+              "springgreen3", 
+              "springgreen4", #S8
+              "yellow4", #CS
+              
+              "firebrick1",# Cytoflex 1
+              "firebrick3", 
+              
+              "#c6dbef",# Auroras
+              "#9ecae1", 
+              "#6baed6",
+              "#3182bd",
+              "#08519c",
+              "gold", #ID7000-1
+              "gold4",
+              "firebrick4",
+              
+              "#e7e1ef",   # Cantos, Fortessas, LSRs
+              "#d4b9da",
+              "#c994c7",
+              "#df65b0",
+              "#e7298a",
+              "#ce1256",
+              "#980043",
+              "#67001f",
+              
+              "#cccccc" ,# Lyrics
+              "#969696",
+              "#636363",
+              "#373737",
+              
+              #Cytofs
+              "#fdae6b",
+              "#fd8d3c",
+              "#e6550d",
+              "#a63603",
+              "#00CDCD",
+              
+
+              "lightgrey","lightgrey","lightgrey","lightgrey","lightgrey"
+)
+
+head(usagedataperweek_long) # Sanity check. Does data look ok?
+
+
+# Plot and save a figure of each instrument
+ggplot(usagedataperweek_long, aes(x=ymd(Week), y=(value/60),group=variable,color=variable)) + 
+  geom_line(stat='identity',linewidth=1) + 
+  theme_bw()+
+  scale_color_manual(values = my_palette)+
+  theme(axis.text.x = element_text(angle = 45,hjust=1))+
+  labs(title="Weekly instrument usage",y="Usage per week (h)",x="Date",fill="System")+
+  scale_x_date(date_breaks = "3 months", date_labels = "%b %Y")+
+  facet_wrap(~variable,nrow=5,scales = "free_y") # For now excluded form 
+ggsave("Weekly instrument usage (h) per instrument +FCF.png",height=10,width=34)    
+
+# Plot and save  stacked bar graphs
+
+ggplot(usagedataperweek_long, aes(x=ymd(Week), y=(value/60),fill=variable)) + 
+  geom_bar(stat='identity',colour="black") + 
+  theme_bw()+
+  scale_fill_manual(values = my_palette)+
+  theme(axis.text.x = element_text(angle = 45,hjust=1))+
+  labs(title="Weekly instrument usage",y="Usage per week (h)",x="Date",fill="System")+
+  scale_x_date(date_breaks = "1 month", date_labels = "%b %Y"      )+
+  ylim(c(0,800))
+ggsave("Weekly instrument usage (h)+FCF.png")    
+
+ggplot(usagedatapermonth_long, aes(x=ymd(month), y=(value/60),fill=variable)) + 
+  geom_bar(stat='identity',colour="black") + 
+  theme_bw()+
+  scale_fill_manual(values = my_palette)+
+  theme(axis.text.x = element_text(angle = 45,hjust=1))+
+  labs(title="Monthly instrument usage",y="Usage per week (h)",x="Date",fill="System")+
+  scale_x_date(date_breaks = "3 months", date_labels = "%b %Y"      )
+ggsave("monthly instrument usage (h)+FCF.png")    
+
+
+ggplot(usagedataperquarter_long, aes(x=ymd(quarter), y=(value/60),fill=variable)) + 
+  geom_bar(stat='identity',colour="black") + 
+  theme_bw()+
+  scale_fill_manual(values = my_palette)+
+  theme(axis.text.x = element_text(angle = 45,hjust=1))+
+  labs(title="Quarterly instrument usage",y="Usage per quarter (h)",x="Date",fill="System")+
+  scale_x_date(date_breaks = "3 months", date_labels = "%b %Y"      )
+ggsave("monthly instrument usage (h)+FCF.png")    
+
+
+
+
+################ add different colour scheme to colour by instrument type
+
+my_palette2<-c(#"white", This should not be necessary, since the NA's are solved
+  #ccece6",### make a custom palette from C colour brewer
+  "green1", #Aria 1
+  "green1",
+  "green1", 
+  "green1", #S8
+  "green1", #CS
+  
+  "springgreen1",# Cytoflex 1
+  "springgreen1", 
+  
+  "blue2",# Auroras
+  "blue2",
+  "blue2",
+  "blue2",
+  "blue2",
+  "blue2",
+  "blue2",
+  "blue2",
+  
+  
+  "darkorange",   # Cantos, Fortessas, LSRs
+  "darkorange",
+  "darkorange",
+  "darkorange",
+  "darkorange",
+  "darkorange",
+  "darkorange",
+  "darkorange",
+  
+  "red" ,# Lyrics
+  "red",
+  "red",
+  "red",
+  
+  #Cytofs
+  "khaki3",
+  "khaki3",
+  "#00CDCD",
+  "#00CDCD",
+  "#00CDCD",
+  
+  
+  "lightgrey","lightgrey","lightgrey","lightgrey","lightgrey"
+)
+
+ggplot(usagedatapermonth_long, aes(x=ymd(month), y=(value/60),fill=variable)) + 
+  geom_bar(stat='identity',colour="black") + 
+  theme_bw()+
+  scale_fill_manual(values = my_palette2)+
+  theme(axis.text.x = element_text(angle = 45,hjust=1))+
+  labs(title="Monthly instrument usage",y="Usage per week (h)",x="Date",fill="System")+
+  scale_x_date(date_breaks = "3 months", date_labels = "%b %Y"      )
+
+ggsave("monthly instrument usage (h)+FCF grouper per type.png")    
+
+
+
+
+
+############################################################################################################
+############################################################################################################
+##### Split instrument usage by year for trend analysis#####################################################
+############################################################################################################
+############################################################################################################
+
+head(usagedata_nocanc_notrain)
+
+yeardata<-usagedata_nocanc_notrain
+yeardata$Year<-format(dmy(yeardata$Date), "%Y")
+
+
+# aggregate the data
+
+agg_yeardata<-aggregate(Length.booked ~ System + Year, data = yeardata, FUN = sum, na.rm = TRUE)
+agg_yeardata$Length.booked<-agg_yeardata$Length.booked/60
+write.xlsx(as.data.frame(agg_yeardata), "Instrument usage per year.xlsx")
+
+
+#### Take single instrument (type) if you want
+agg_yeardata_selection<-agg_yeardata %>%
+  filter(str_detect(System, 'Fortessa'))
+
+  
+
+# line graphs of selected instruments
+ggplot(agg_yeardata_selection, aes(x=as.numeric(Year), y=as.numeric(Length.booked),color=System,group=System)) + 
+  geom_line(lwd = 2) + 
+  theme_bw()+
+  #scale_fill_manual(values = my_palette)+
+    scale_x_continuous(limits = c(2019, 2025))+
+  labs(title="Yearly instrument usage",y="Usage (h)",x="Year",fill="System")
+
+
+
+ggplot(agg_yeardata_selection, aes(x=as.numeric(Year), y=as.numeric(Length.booked),fill=System,group=System)) + 
+  geom_bar(stat='identity',colour="black") +
+  theme_bw()+
+ # scale_fill_manual(values = my_palette)+
+  labs(title="Yearly instrument usage",y="Usage (h)",x="Year",fill="System")
+
+
+
+
+
+
+
+#############################################################################################################################################
+#############################################################################################################################################
+################## Same figures, but income instead of booked hours ############################################################################
+#############################################################################################################################################
+#############################################################################################################################################
+head(usagedata_nocanc_notrain)
+
+usageincomeperday_wide<-dcast(as.data.table(usagedata_nocanc_notrain),Date ~ System , value.var="Amount", fun.aggregate = sum)
+usageincomeperday_long<-melt(usageincomeperday_wide, id.vars="Date")
+head(usageincomeperday_wide)
+
+### Re-order Systems
+
+levels(usageincomeperday_long$variable)
+usageincomeperday_long$variable<-factor(usageincomeperday_long$variable,levels=c( "Aria 1" , "Aria 1 (non-assisted sorting)" ,"Aria 2 (non-assisted sorting)", "Aria 3", "S8", "FACSDiscover S8", "Cytoflex SRT ML-I", "Cytoflex SRT ML-II",
+                                                                                          "Aurora-3L 1", "Aurora-3L 2","Aurora-3L 3","Aurora-5L 1","Aurora-5L 2" ,"Sony 1 (ID7000)" , "Sony 2 (ID7000)","CytoFLEX LX",
+                                                                                          "Canto 1" ,"Canto 2 / ML-II","Canto 3" ,"Canto 4", "Fortessa 1" ,"Fortessa 2","LSR-II 1","LSR-II 3","Lyric 1" ,"Lyric 2 / ML-III","Lyric 3","Lyric 4",
+                                                                                          "CyTOF XT" , "Helios"  ,"Hyperion 1", "Hyperion 2","LSR-II 2","Calibur 1", "Calibur 2" , "Aurora CS" , "NA")  )
+
+
+
+
+# Aggregate income by weeks, add as separate column & re-sum per week
+usageincomeperday_long$Week <- (cut(dmy(usageincomeperday_long$Date),
+                                    breaks = "month",
+                                    start.on.monday = TRUE))
+usageincomeperweek_wide<-dcast(as.data.table(usageincomeperday_long),Week ~ variable , value.var="value", fun.aggregate = sum)
+usageincomeperweek_long<-melt(usageincomeperweek_wide, id.vars="Week")
+head(usageincomeperweek_wide)
+
+weekly_income<-usageincomeperday_long %>%
+  group_by(Week) %>%
+  summarise(Income=sum(value))
+
+write.xlsx(as.data.table(weekly_income),"weekly income.xlsx")
+
+
+agg_week<-aggregate(value ~ variable + Week, data = usageincomeperday_long, FUN = sum, na.rm = TRUE)
+
+
+write.xlsx(as.data.table(agg_week),"weekly income per instrument.xlsx")
+
+
+###
+usageincomeperday_long$quarter <- (cut(dmy(usageincomeperday_long$Date),
+                                    breaks = "quarter",
+                                    start.on.monday = TRUE))
+usageincomeperquarter_wide<-dcast(as.data.table(usageincomeperday_long),quarter ~ variable , value.var="value", fun.aggregate = sum)
+usageincomeperquarter_long<-melt(usageincomeperquarter_wide, id.vars="quarter")
+head(usageincomeperweek_wide)
+
+quarterly_income<-usageincomeperquarter_long %>%
+  group_by(quarter) %>%
+  summarise(Income=sum(value))
+
+
+
+
+
+
+ggplot(usageincomeperweek_long, aes(x=ymd(Week), y=(value),group=variable,color=variable)) + 
+  geom_line(stat='identity',linewidth=1) + 
+  theme_bw()+
+  scale_color_manual(values = my_palette)+
+  theme(axis.text.x = element_text(angle = 45,hjust=1))+
+  labs(title="Weekly instrument income",y="Income per week (EUR)",x="Date",fill="System")+
+  scale_x_date(date_breaks = "3 months", date_labels = "%b %Y")+
+  facet_wrap(~variable,nrow=5,scales = "free_y") # For now excluded form 
+
+
+ggsave("Weekly instrument income (EUR) per instrument.png",height=10,width=34)    
+
+
+ggplot(usageincomeperweek_long, aes(x=ymd(Week), y=(value),fill=variable)) + 
+  geom_bar(stat='identity',colour="black") + 
+  theme_bw()+
+  scale_fill_manual(values = my_palette)+
+  theme(axis.text.x = element_text(angle = 45,hjust=1))+
+  labs(title="Weekly instrument income",y="Income per week (EUR)",x="Date",fill="System")+
+  scale_x_date(date_breaks = "1 month", date_labels = "%b %Y")
+ylim(c(0,800))
+
+
+ggsave("Weekly instrument Income (EUR).png")    
+
+
+
+
+
+
+
+
+
+
+#############################################################################################################################################
+#############################################################################################################################################
+################## Selection of data from one vendor (BD) data only for evaluation meetings ############################################################################
+#############################################################################################################################################
+#############################################################################################################################################
+levels(usagedatapermonth_long$variable)
+BD_usagedatamonth<-usagedatapermonth_long[grep("Aria|Canto|Fortessa|Lyric 2 / ML-III|Lyric 3|Lyric 4|S8", usagedatapermonth_long$variable),]
+BD_usagedata<-usagedataperweek_long[grep("Aria 1|Aria 3|Canto|Fortessa|Lyric 2 / ML-III|Lyric 3|Lyric 4|S8", usagedataperweek_long$variable),]
+
+
+### Sanity checks
+levels(BD_usagedatamonth$variable)
+unique(BD_usagedatamonth$variable)
+
+###  BD_usagedata is weekly
+
+
+
+
+head(BD_usagedatamonth)
+BD_palette<-c(    "darkorange", #Aria
+                  "darkorange2",
+                  "darkorange4",
+                  "red2" , #S8
+                  "deepskyblue",#Canto
+                  "deepskyblue2",
+                  "deepskyblue3",
+                  "deepskyblue4",
+                  "darkorchid1",
+                  "darkorchid3",
+                  "blue1",
+#                  "blue3",
+                  "darkslategray1",
+#                  "darkslategray3",
+                  "darkslategray4",
+#                  "darkslategray",
+                  
+                  "gray","gray","gray","gray","gray","gray"
+)
+
+
+ggplot(BD_usagedatamonth, aes(x=ymd(month), y=(value/60),fill=variable)) + 
+  geom_bar(stat='identity',colour="black") + 
+  theme_bw()+
+  scale_fill_manual(values = BD_palette)+
+  theme(axis.text.x = element_text(angle = 45,hjust=1))+
+  labs(title="Monthly instrument usage",y="Usage per month (h)",x="Date",fill="System")+
+  scale_x_date(date_breaks = "1 month", date_labels = "%b %Y",limits = as.Date(c("2022-03-01", "2026-03-01")))
+ggsave("Monthly BD usage (h) Feb 2026.png")
+
+###palette2 is only active BD instruments
+BD_palette2<-c(    "darkorange", #Aria
+                   "darkorange4",
+                   "deepskyblue",#Canto
+                   "deepskyblue2",
+                   "deepskyblue3",
+                   "deepskyblue4",
+                   "darkorchid1",
+                   "darkorchid3",
+                   "darkslategray3",
+                   "darkslategray4",
+                   "darkslategray",
+                   "red2" #S8
+)
+
+ggplot(BD_usagedata, aes(x=ymd(Week), y=(value/60),color=variable)) + 
+  geom_line(size=1) + 
+  scale_color_manual(values = BD_palette2)+
+  theme_bw()+
+  labs(title="Weekly instrument usage",y="Usage per week (h)",x="Date",color="System")+
+  scale_x_date(breaks = seq(from = as.Date("2021-01-01"), to = as.Date("2024-11-01"),by = "4 months") , date_labels = "%b %Y",limits = as.Date(c("2021-01-01", "2024-11-01")))+
+  theme(axis.text.x = element_text(angle = 45,hjust=1))+
+  facet_wrap(~variable)
+
+ggsave("Weekly BD usage (h) lines March 2024.png")
+
+BD_usagedata$Week<-as.Date(BD_usagedata$Week)
+
+Median_usage<-BD_usagedata %>%
+  filter(Week > as.Date('2023-11-01')) %>%
+  group_by(ID = variable) %>%
+  summarise(Median = mean(value/60))
+
+ggplot(Median_usage,aes(y=Median,x=ID,fill=ID))+
+  scale_fill_manual(values = BD_palette2)+
+  theme_bw()+
+  geom_col(colour="black")+
+  labs(title="Mean weekly usage 01-11-2023 - 01-11-2024",y="Mean hours booked/week",x="Instrument",legend="Instrument")+
+  theme(axis.text.x = element_text(angle = 45,hjust=1))
+ggsave("Average BD usage (h) November 2023 - November 2024.png")
+
+
+################ Get NIR laser use
+
+head(usagedata_nocanc_notrain)
+BD_usagedata_Fortessa2<-usagedata_nocanc_notrain[grep("Fortessa 2", usagedata_nocanc_notrain$System),]
+BD_usagedata_Fortessa2$year<-str_replace(BD_usagedata_Fortessa2$Date, ".*-", "")
+BD_usagedata_Fortessa2$month<-str_replace(BD_usagedata_Fortessa2$Date, ".*-", "")
+
+
+head(BD_usagedata_Fortessa2)
+
+NIR_usage<-BD_usagedata_Fortessa2 %>% 
+  filter(str_detect(SE, 'SE1'))%>% 
+  group_by(year) %>% 
+  summarise(NIR_h = sum(Length.booked/60))
+
+
+total_usage<-BD_usagedata_Fortessa2 %>% 
+  group_by(year) %>% 
+  summarise(Total_h = sum(Length.booked/60))
+
+NIR_data<-merge(NIR_usage,total_usage,all.y=TRUE)
+NIR_data$Percentage<-NIR_data$NIR_h/NIR_data$Total_h*100
+write.xlsx(NIR_data,"NIR_data.xlsx")
+
+
+
+#############################################################################################################################################
+#############################################################################################################################################
+#### Get usage from single instrument per year
+#############################################################################################################################################
+#############################################################################################################################################
+
+usagedata_nocanc_notrain2$Year<-(cut(dmy(usagedata_nocanc_notrain2$Date),
+                                     breaks = "year",
+                                     start.on.monday = TRUE))
+
+usagedata_nocanc_notrain2$Month<-(cut(dmy(usagedata_nocanc_notrain2$Date),
+                                     breaks = "month",
+                                     start.on.monday = TRUE))
+unique(usagedata_nocanc_notrain2$System)
+
+instrumentuse_year<-usagedata_nocanc_notrain2%>%
+  filter(System=="Fortessa 2")%>%
+  group_by(Year) %>% 
+  summarise(use_h = sum(Length.booked/60))
+instrumentuse_year
+instrumentusers_year<-usagedata_nocanc_notrain2%>%
+  filter(System=="Fortessa 2")%>%
+  filter(Year=="2024-01-01")
+unique(instrumentusers_year$User)
+usagedata_nocanc_notrain2
+
+instrumentuse_month<-usagedata_nocanc_notrain2%>%
+  filter(System=="Fortessa 2")%>%
+  group_by(Month) %>% 
+  summarise(use_h = sum(Length.booked/60))
+write.xlsx(instrumentuse_month,"instrumentuse_month.xlsx")
+
+#############################################################################################################################################
+#############################################################################################################################################
+################## Select certain data only for ############################################################################
+#############################################################################################################################################
+#############################################################################################################################################
+levels(usagedatapermonth_long$variable)
+aurora_usagedata<-usagedatapermonth_long[grep("Aurora", usagedatapermonth_long$variable),]
+head(aurora_usagedata)
+
+aurora_palette<-c("darkorchid1",#CS
+                  "#E5EEF7",# Auroras
+                  "#C6DBEF", 
+                  "#94BCE0",
+                  "#67A7D7",
+                  "#3182BD"
+                  )
+
+
+ggplot(aurora_usagedata, aes(x=ymd(month), y=(value/60),fill=variable)) + 
+  geom_bar(stat='identity',colour="black") + 
+  theme_bw()+
+  scale_fill_manual(values = aurora_palette)+
+  theme(axis.text.x = element_text(angle = 45,hjust=1))+
+  labs(title="Monthly Aurora usage",y="Usage per month (h)",x="Date",fill="System")+
+  scale_x_date(date_breaks = "1 month", date_labels = "%b %Y",limits = as.Date(c("2023-03-01", "2026-03-01")))
+  
+head(aurora_usagedata)
+
+#### Plot percentage use of plate reader based on special environment
+
+ plate_palette<-c(
+"blue", 
+"green")#CS
+
+# Get plate reader data
+unique(usagedata_nocanc_notrain$SE )
+
+auroraplatedata<-usagedata_nocanc_notrain[grep("3L 1|5L", usagedata_nocanc_notrain$System),]
+auroraplatedata$Month<-format(dmy(auroraplatedata$Date), "%Y-%m")
+
+auroraplatedata$SE[auroraplatedata$SE =="SE1"]          <-"Manual"
+auroraplatedata$SE[auroraplatedata$SE ==" " ]            <-"Manual"
+auroraplatedata$SE[auroraplatedata$SE =="SE1 SE2" ]     <-"SE2"
+auroraplatedata$SE[auroraplatedata$SE =="SE2" ]         <-"Plate reader"
+
+unique(auroraplatedata$SE )
+
+# aggregate the data
+agg_platedata<-aggregate(Length.booked ~ System + Month + SE, data = auroraplatedata, FUN = sum, na.rm = TRUE)
+agg_platedata$Month<-as.Date(paste(agg_platedata$Month, "-01", sep="")) # Adds a day to month so you can use ymd()
+
+### and plot data
+ggplot(agg_platedata, aes(x=ymd(Month), y=(Length.booked/60),fill=SE)) + 
+  geom_bar(stat='identity',colour="black") + 
+  theme_bw()+
+  scale_fill_manual(values = plate_palette)+
+  theme(axis.text.x = element_text(angle = 45,hjust=1))+
+  
+  labs(title="Plate reader usage",y="Usage per month (hours)",x="Date",fill="System")
+ # scale_x_date(date_breaks = "1 month", date_labels = "%b %Y",limits = as.Date(c("2023-11-30", "2025-11-30")))
+  
+ 
+
+################## Add column indicating machine type
+
+usagedatapermonth_long_bytype<-usagedatapermonth_long
+usagedatapermonth_long_bytype$Instrumenttype<-usagedatapermonth_long_bytype$variable
+
+levels(usagedatapermonth_long_bytype$Instrumenttype)[grepl("Aria|Cytoflex|S8", levels(usagedatapermonth_long_bytype$Instrumenttype))] <- "Sorter"
+levels(usagedatapermonth_long_bytype$Instrumenttype)[grepl("Aurora|Sony|LX", levels(usagedatapermonth_long_bytype$Instrumenttype))] <- "Spectral"
+levels(usagedatapermonth_long_bytype$Instrumenttype)[grepl("Canto 1|Canto 2|Calibur|LSR|Fortessa 1", levels(usagedatapermonth_long_bytype$Instrumenttype))] <- "Conventional"
+levels(usagedatapermonth_long_bytype$Instrumenttype)[grepl("Canto|Lyric|Fortessa ", levels(usagedatapermonth_long_bytype$Instrumenttype))] <- "Conventional (diagnostic)"
+levels(usagedatapermonth_long_bytype$Instrumenttype)[grepl("CyTOF|Helios|Hyperion", levels(usagedatapermonth_long_bytype$Instrumenttype))] <- "CyTOF"
+
+levels( as.factor(usagedatapermonth_long_bytype$Instrumenttype))
+
+my_palette2<-c(  "#66c2a4",### make a custom palette from C colour brewer
+                 "firebrick3",# Auroras
+                "mediumblue",   # Conventional
+                 "deepskyblue1", # Diagnostic
+                 "#fd8d3c",
+                 "White","White","White"
+)
+
+
+
+ggplot(usagedatapermonth_long_bytype, aes(x=ymd(month), y=(value/60),fill=Instrumenttype)) + 
+  geom_bar(stat='identity',colour="black") + 
+  theme_bw()+
+  scale_fill_manual(values = my_palette2)+
+  theme(axis.text.x = element_text(angle = 45,hjust=1))+
+  labs(title="Monthly instrument usage by equipment type",y="Usage per month (h)",x="Date",fill="System")+
+  scale_x_date(date_breaks = "3 months", date_labels = "%b %Y")
+
+
+ggsave("monthly instrument usage (h) per instrument type.png")    
+ggplot(usagedatapermonth_long_bytype, aes(x=ymd(month), y=(value/60),fill=Instrumenttype)) + 
+  geom_bar(stat='identity',colour="black") + 
+  theme_bw()+
+  scale_fill_manual(values = my_palette2)+
+  theme(axis.text.x = element_text(angle = 45,hjust=1))+
+  labs(title="Monthly instrument usage by equipment type",y="Usage per month (h)",x="Date",fill="System")+
+  facet_wrap(~Instrumenttype,nrow=5,scales = "free_y") +# For now excluded form 
+
+  scale_x_date(date_breaks = "3 months", date_labels = "%b %Y")
+
+ggplot(usagedatapermonth_long_bytype, aes(x=ymd(Month), y=(value/60),group=Instrumenttype,color=Instrumenttype)) + 
+  geom_line(stat='identity',linewidth=1) + 
+  theme_bw()+
+  scale_color_manual(values = my_palette2)+
+  theme(axis.text.x = element_text(angle = 45,hjust=1))+
+  labs(title="Monthly instrument usage",y="Usage per month (h)",x="Date",fill="Instrumenttype")+
+  scale_x_date(date_breaks = "3 months", date_labels = "%b %Y")+
+  facet_wrap(~Instrumenttype,nrow=5,scales = "free_y") # For now excluded form 
+ggsave("monthly instrument usage (h) per type +FCF.png",height=10,width=34)    
+
+
+
+################ ################ ################ ################ ################ ################ ################ ################ 
+################ ################ ################ ################ ################ ################ ################ ################ 
+################ Make weekly graph  of income
+################ ################ ################ ################ ################ ################ ################ ################ 
+################ ################ ################ ################ ################ ################ ################ ################ 
+head(usagedata_nocanc_notrain) 
+
+
+usageincomeperday_wide<-dcast(as.data.table(usagedata_nocanc_notrain),Date ~ System , value.var="Amount", fun.aggregate = sum)
+usageincomeperday_long<-melt(usageincomeperday_wide, id.vars="Date")
+head(usageincomeperday_wide)
+
+
+levels(usageincomeperday_long$variable)
+usageincomeperday_long$variable<-factor(usageincomeperday_long$variable,levels=c( "Aria 1" ,"Aria 2 (non-assisted sorting)", "Aria 3", "Cytoflex SRT ML-I", "Cytoflex SRT ML-II",
+                                                                                  "Aurora-3L 1", "Aurora-3L 2","Aurora-3L 3","Aurora-5L 1","Aurora-5L 2",
+                                                                                  "Canto 1" ,"Canto 2 / ML-II","Canto 3" ,"Canto 4", "Fortessa 1" ,"Fortessa 2","LSR-II 1","LSR-II 3","Lyric 1" ,"Lyric 2 / ML-III","Lyric 3",
+                                                                                  "CyTOF XT" , "Helios"  ,"Hyperion 1", "Hyperion 2","LSR-II 2","Calibur 1", "Calibur 2" )  )
+levels(usageincomeperday_long$variable)
+
+
+
+# Aggregate income by weeks, add as separate column & re-sum per week
+usagedataperday_long$Week <- (cut(dmy(usagedataperday_long$Date),
+                                  breaks = "week",
+                                  start.on.monday = TRUE))
+usagedataperweek_wide<-dcast(as.data.table(usagedataperday_long),Week ~ variable , value.var="value", fun.aggregate = sum)
+usagedataperweek_long<-melt(usagedataperweek_wide, id.vars="Week")
+head(usagedataperday_wide)
+
+
+
+
+usageincomeperday_long$Week <- (cut(dmy(usageincomeperday_long$Date),
+                                    breaks = "week",
+                                    start.on.monday = TRUE))
+usageincomeperweek_wide<-dcast(as.data.table(usageincomeperday_long),Week ~ variable , value.var="value", fun.aggregate = sum)
+usageincomeperweek_long<-melt(usageincomeperweek_wide, id.vars="Week")
+head(usageincomeperday_wide)
+
+my_palette
+
+head(usageincomeperweek_long)
+ggplot(usageincomeperweek_long, aes(x=ymd(Week), y=(value),fill=variable)) + 
+  geom_bar(stat='identity',colour="black") + 
+  theme_bw()+
+  scale_fill_manual(values = my_palette)+
+  theme(axis.text.x = element_text(angle = 45,hjust=1))+
+  labs(title="Weekly instrument income",y="Income (EUR)",x="Date",fill="System")+
+  scale_x_date(date_breaks = "1 month", date_labels = "%b %Y")
+
+ggsave("Weekly instrument revenue (Euro).png")
+
+ggplot(usageincomeperweek_long, aes(x=ymd(Week), y=(value),group=variable,color=variable)) + 
+  geom_line(stat='identity',linewidth=1) + 
+  theme_bw()+
+  scale_color_manual(values = my_palette)+
+  theme(axis.text.x = element_text(angle = 45,hjust=1))+
+  labs(title="Weekly instrument income",y="Income (EUR)",x="Date",fill="System")+
+  scale_x_date(date_breaks = "3 months", date_labels = "%b %Y")+
+  facet_wrap(~variable,nrow=5,scales="free_y")
+ggsave("Weekly instrument revenue (Euro) per instrument.png")
+
+
+
+
+
+
+
+
+####################################### 
+### For ISAC SRL: calculate the income generated by each department/group
+head(usagedata_nocanc_notrain)
+
+levels(as.factor(usagedata_nocanc_notrain$Group))
+income_per_group<-usagedata_nocanc_notrain %>%
+  group_by(Group) %>%
+  summarise(Freq = sum(Amount))
+
+income_per_group$Perc<-income_per_group$Freq/sum(income_per_group$Freq)*100
+head(income_per_group)
+
+income_per_group<-income_per_group[order(-income_per_group$Perc),]
+write.xlsx(income_per_group,"income per group.xlsx",overwrite=TRUE)
+
+
+gg100<-ggplot(data=income_per_group, aes(x=seq_len(nrow(income_per_group)), y=cumsum(Perc))) + 
+  geom_line()+
+  geom_vline(xintercept = 10)+
+  theme_bw()+
+  scale_x_continuous(breaks=seq(0,100,10))+
+  labs(title="Cumulative distribution of income per group")+xlab("Group (ordered by amount of income generated)")+ylab("Income (% of total)")
+gg100
+
+gg101<-ggplot(data=income_per_group, aes(x=seq_len(nrow(income_per_group)), y=(Perc))) + 
+  geom_line()+
+  geom_vline(xintercept = 10)+
+  scale_x_continuous(breaks=seq(0,100,10))+
+  
+  theme_bw()+
+  labs(title="Income per group")+xlab("Group (ordered by amount of income generated)")+ylab("Income (% of total)")
+gg101
+ggarrange(gg100,gg101,nrow=2)
+ggsave("Income per group.png",height=5, width=7)
+
+
+usage_per_group<-usagedata_nocanc_notrain %>%
+  group_by(Group) %>%
+  summarise(Time = sum(Length.booked))
+usage_per_group$Perc<-usage_per_group$Time/sum(usage_per_group$Time)*100
+usage_per_group<-usage_per_group[order(-usage_per_group$Perc),]
+write.xlsx(usage_per_group,"Time booked per group.xlsx",overwrite=TRUE)
+
+gg102<-ggplot(data=usage_per_group, aes(x=seq_len(nrow(usage_per_group)), y=cumsum(Perc))) + 
+  geom_line()+
+  geom_vline(xintercept = 10)+
+  theme_bw()+
+  scale_x_continuous(breaks=seq(0,100,10))+
+  labs(title="Cumulative distribution of time booked per group")+xlab("Group (ordered by amount of income generated)")+ylab("Income (% of total)")
+gg102
+
+gg103<-ggplot(data=usage_per_group, aes(x=seq_len(nrow(usage_per_group)), y=(Perc))) + 
+  geom_line()+
+  geom_vline(xintercept = 10)+
+  scale_x_continuous(breaks=seq(0,100,10))+
+  
+  theme_bw()+
+  labs(title="Time booked per group")+xlab("Group (ordered by amount of income generated)")+ylab("Income (% of total)")
+gg103
+
+ggarrange(gg100,gg101,nrow=2)
+ggsave("Income per group.png",height=5, width=7)
+
+
+
+############################ Get usage time per year
+usagedata<-rbind(usagedata2023,usagedata2023)
+
+
+usagedata_nocanc<-usagedata %>%
+  filter(Notes!="cancelled"  )
+usagedata_nocanc_notrain<-usagedata_nocanc %>%
+  filter(SE2.comments!="Training"  )
+usagedata_nocanc_notrain<-usagedata_nocanc_notrain %>%
+  filter(SE2.comments!="Training session"  )
+usagedata_nocanc_notrain<-usagedata_nocanc_notrain %>%
+  filter(Group!="FCF"  )
+
+usage_time2023<-usagedata_nocanc_notrain %>%
+  group_by(System) %>%
+  summarise(h = sum(Length.booked)/60) # h booked
+
+usage_time_historically<-merge(usage_time2019,usage_time2020,by="System",all=TRUE)
+usage_time_historically<-merge(usage_time_historically,usage_time2021,by="System",all=TRUE)
+usage_time_historically<-merge(usage_time_historically,usage_time2022,by="System",all=TRUE)
+usage_time_historically<-merge(usage_time_historically,usage_time2023,by="System",all=TRUE)
+colnames(usage_time_historically)<-c("System" ,"2019" ,   "2020",    "2021"  ,  "2022","2023")
+
+
+write.xlsx(usage_time_historically,"Booked time per instrument 2019-2023.xlsx")
+
+####################################################################################################################################
+####################################################################################################################################
+#### Make graphs o income up to now
+####################################################################################################################################
+####################################################################################################################################
+
+
+tail(usagedata_nocanc_notrain)
+
+summie<-sum(usagedata_nocanc_notrain$Amount) #calculate total income
+
+### Mke 
+gg_h<-ggplot(usagedata_nocanc_notrain, aes(x=System,y=Length.booked/60))+
+  geom_bar(stat="identity")
+gg_h
+
+### Get the data of # hours booked and income per system
+
+usage_time<-usagedata_nocanc_notrain %>%
+  group_by(System) %>%
+  summarise(h = sum(Length.booked)/60) # h booked
+write.xlsx(usage_time,"Time used in 2025 up to sep 30.xlsx")
+
+usage_income<-usagedata_nocanc_notrain %>%
+  group_by(System) %>%
+  summarise(Income = sum(Amount)) # income
+write.xlsx(usage_income,"Income 2025 up to sep 30.xlsx")
+
+usage_income_incl_canc<-usagedata %>%
+  group_by(System) %>%
+  summarise(Income = sum(Amount)) # income
+write.xlsx(usage_income_incl_canc,"Income 2025 up to sep 30 incl canc.xlsx")
+
+
+
+
+
+
+#income_v_h<-merge(usage_time,usage_income, by= "System") # merge the two - only data without cancellations
+income_v_h<-merge(usage_time,usage_income_incl_canc, by= "System") # merge the two
+write.xlsx(income_v_h,"Income vs h booked 2023.xlsx")
+
+gg_h.v.income<-ggplot(income_v_h, aes(x=h,y=Income))+ # make a 2D plot of time booked vs income
+  geom_point()+
+ # geom_label_repel()+
+  labs(title="Income per system vs # hours booked",x="Hours booked",y="Income (€)")
+
+
+gg_h.v.income
+ggsave("Hours booked vs income.png")
+
+### Make a figure of income vs cost for every machine
+#this requires you to update the previously made "Income vs h booked.xlsx" with an 
+#additional column called "Contract costs". Rename the xlsx as "Income vs h booked_adapted.xlsx
+# if you're interested in percentages, you can also plot them under Perc.rebates
+
+Income_adapted<-read.xlsx("Income vs h booked vs costs.xlsx")
+
+gg_cost.v.income<-ggplot(Income_adapted, aes(x=Costs,y=Income,label=System))+ # make a 2D plot of time booked vs income
+  geom_point()+
+  geom_label_repel(color="white")+
+  labs(title="Income per system vs service contract costs",x="Costs service contract (€)",y="Income (€)")
+gg_cost.v.income
+ggsave("Service Contract costs vs vs income.png")
+
+
+gg_cost.v.perc_rebates<-ggplot(Income_adapted, aes(x=Costs,y=Perc.rebates*100,label=System))+ # make a 2D plot of time booked vs income
+  geom_point()+
+  geom_label_repel(segment.color="black")+
+  labs(title="Percentage of service contract earned back",x="Costs service contract (€)",y="Percentage earned back")
+gg_cost.v.perc_rebates
+ggsave("Service Contract costs vs perc income.png")
+
+
+
+
+
+### Compare # hours booked vs hours used for each user
+
+#this requires you to update the "Income vs h booked.xlsx" with n additional column called "Contract costs". Rename the xlsx as "Income vs h booked_adapted.xlsx
+colnames(usagedata_nocanc_notrain)
+usagedata_nocanc_notrain_noFCF<-usagedata_nocanc_notrain %>%
+  filter(Group!="Flow Cytometry Core Facility"  )
+
+
+h_booked_per_user<-usagedata_nocanc_notrain_noFCF %>%
+  group_by(User) %>% 
+  summarise(booked = sum(Length.booked))
+
+h_used_per_user<-usagedata_nocanc_notrain %>%
+  group_by(User) %>% 
+  summarise(used = sum(Length.used))
+
+stats_per_user<-merge(h_booked_per_user,h_used_per_user,by="User")
+
+#stats_per_user<-stats_per_user[stats_per_user$booked < 30000,] # Remove one user who books for diagnostics
+
+gg_bookedvused<-ggplot(stats_per_user,aes(x=booked/60,y=used/60))+
+  geom_point()+
+  geom_abline(intercept=0, slope=1,linetype=2 )+
+  geom_label_repel(data=stats_per_user[stats_per_user$used > stats_per_user$booked,],
+                   aes(label=User),
+                                      min.segment.length = unit(0, 'lines'), 
+                   nudge_y = .2)+
+                  labs(title="Hours used vs hours booked",x="Hours booked",y="Hours used")+
+                   theme_bw()
+
+gg_bookedvused
+
+
+
+#### Interactive plot
+fig <- plot_ly(stats_per_user, x = ~booked/60, y = ~used/60, type = 'scatter', mode = 'markers',
+               text = ~paste('User: ', User))
+
+
+########################### ########################### ########################### ########################### 
+########################### Calculate percentage of cancellations per instrument
+########################### ########################### ########################### ########################### 
+usagedata_notrain<-usagedata %>%
+  filter(SE2.comments!="Training"  )
+usagedata_notrain<-usagedata_notrain %>%
+  filter(SE2.comments!="Training session"  )
+
+
+# Aggregate data by weeks, add as separate column & re-sum per week
+usagedata_notrain$Month <- (cut(dmy(usagedata_notrain$Date),
+                                breaks = "month"))
+usagedata_nocanc_notrain2<-usagedata_notrain %>%
+  filter(Notes!="cancelled"  )
+
+
+n_sessions<-usagedata_notrain %>%
+  group_by(Month)%>%
+  count(System)
+
+
+n_sessions_not_cancelled <-usagedata_nocanc_notrain2 %>%
+  group_by(Month)%>%
+  count(System)
+
+perc_cancellations<-n_sessions%>%
+  full_join(n_sessions_not_cancelled, by=c("System","Month"))
+
+
+colnames(perc_cancellations)<-c("Month","System","Total", "Not cancelled")
+perc_cancellations$percentage<-100-(perc_cancellations$`Not cancelled`/perc_cancellations$Total*100)
+
+### Look at only aurora data
+perc_cancellations_aurora<-aurora_usagedata<-perc_cancellations[grep("Aurora", perc_cancellations$System),]
+perc_cancellations_aurora<-perc_cancellations_aurora %>%
+  filter(System!="Aurora-3L 3 + ESP module"  )
+perc_cancellations_aurora<-perc_cancellations_aurora %>%
+  filter(System!="Aurora CS"  )
+
+usagedata_nocanc_notrain2<-usagedata_notrain %>%
+  filter(Notes!="cancelled"  )
+
+
+
+
+unique(perc_cancellations_aurora$System)
+aurora_palette<-c("#c6dbef",# Auroras
+                  "#c6dbef", 
+                  "#c6dbef",
+                  "#3182bd",
+                  "#3182bd", )
+
+ggplot(perc_cancellations_aurora, aes(x=ymd(Month), y=(percentage),fill=System)) + 
+  geom_line(stat='identity',linewidth=1) +   
+  theme_bw()+
+  scale_fill_manual(values = aurora_palette)+
+  theme(axis.text.x = element_text(angle = 45,hjust=1))+
+  labs(title="Cancellations over time",y="Cancellations (%)",x="Date",fill="System")+
+  scale_x_date(date_breaks = "12 month", date_labels = "%b %Y")+
+  facet_wrap(~System,nrow=5,scales = "free_y") #
+
+#xlim(as.Date(c("2021-01-01", "2023-05-08")))
+
+
+
+########################### Calculate time between cancellation and booking
+usagedata_notrain_Aurora<-usagedata_notrain[grep("Aurora", usagedata_notrain$System),]
+
+usagedata_cancelled<-usagedata_notrain_Aurora %>%
+  filter(Notes=="cancelled")
+head(usagedata_cancelled)
+
+usagedata_cancelled$Year <- (cut(dmy(usagedata_cancelled$Date),
+                                 breaks = "year"))
+
+usagedata_cancelled$Month <- (cut(dmy(usagedata_cancelled$Date),
+                                  breaks = "month"))
+
+usagedata_cancelled$Delta_d_cancelled<-dmy(usagedata_cancelled$Date)-dmy(usagedata_cancelled$Cancellation.date)
+
+unique(usagedata_notrain$Group)
+
+
+n_sessions_cancelled_by_group<-usagedata_cancelled %>%
+  filter(Notes=="cancelled")%>%
+  group_by(Month)%>%
+  count(System)
+
+
+#### Find users who cancel most often
+n_sessions_total_by_user_5L<-usagedata[grep("Aurora", usagedata$System),] %>%
+  filter(Group !="Flow Cytometry Core Facility") %>%
+  count(User)
+colnames(n_sessions_total_by_user_5L)<-c("User", "Total_bookings")
+n_sessions_cancelled_by_user<-usagedata_cancelled %>%
+  count(User)
+
+average_delta_cancelled_by_user<-usagedata_cancelled %>%
+  group_by(User)%>%
+  summarise(mean_delta_cancelled=mean(Delta_d_cancelled),SD_cancelled=sd(Delta_d_cancelled))
+
+cancellations_by_user<-merge(average_delta_cancelled_by_user,n_sessions_cancelled_by_user,by="User")
+cancellations_by_user<-merge(cancellations_by_user,n_sessions_total_by_user_5L,by="User")
+
+
+cancellations_by_user$mean_delta_cancelled <- as.numeric(cancellations_by_user$mean_delta_cancelled )
+head(cancellations_by_user)
+write.xlsx(cancellations_by_user,"Aurora cancellations per user.xlsx")
+
+ggplot(cancellations_by_user, aes(x=n,y=mean_delta_cancelled,label=User))+
+  geom_point(color="red")+
+  geom_text_repel(data=cancellations_by_user[cancellations_by_user$n>25,], cex=3)+
+  ggtitle("Number of 5L Aurora cancellations per user in 2023")+
+  xlab("n cancellations in 2023")+
+  ylab("mean n days before booking")+
+  theme_bw()
+
+ggplot(cancellations_by_user, aes(x=n,y=Total_bookings,label=User))+
+  geom_point(color="red")+
+  geom_text_repel(data=cancellations_by_user[cancellations_by_user$n>300,], cex=3,box.padding = 0.5, max.overlaps = Inf, label="user")+
+  ggtitle("Number of 5L Aurora cancellations per user since 2019")+
+  xlab("number of canellatons")+
+  ylab("total n of bookings")+
+  geom_abline(intercept=0,slope=2,linetype="dashed") +
+  theme_bw()
+
+
+
+
+
+user_over_25_cancellations<-n_sessions_cancelled_by_user %>%
+  filter(n > 300)
+
+
+
+
+usagedata_over_25_cancelled<-merge(usagedata_cancelled,user_over_25_cancellations,by="User") %>%
+  filter(n > 300)
+
+
+
+
+ggplot(usagedata_over_25_cancelled,aes(x=User,y=Delta_d_cancelled))+
+  geom_violin()+
+  geom_point(position = position_jitter(seed = 1, width = 0.1),size=0.7) +
+  theme_bw()+
+  ylab("n days before booking")+
+  ggtitle("Users with > 300 cancellations since 2019")+
+  theme(axis.text.x = element_text(angle = 45, vjust = 0.5, hjust=1))
+
+head(usagedata_over_25_cancelled_with_nbookings)
+ggplot(usagedata_over_25_cancelled_with_nbookings,aes(x=User,y=Delta_d_cancelled))+
+  geom_violin()+
+  geom_point(position = position_jitter(seed = 1, width = 0.1),size=0.7) +
+  theme_bw()+
+  ylab("n days before booking")+
+  ggtitle("Users with > 300 cancellations ever")+
+  theme(axis.text.x = element_text(angle = 45, vjust = 0.5, hjust=1))
+
+
+
+
+#### Aggregate by month
+usagedata_cancelled_1day<-usagedata_cancelled %>%
+  filter(Delta_d_cancelled == 1,Date <1-1-2022)
+
+lastmincancellations<-aggregate(Delta_d_cancelled ~ System + Month, data=usagedata_cancelled_1day, FUN=sum)
+
+ggplot(lastmincancellations, aes(x=Month,y=as.numeric(Delta_d_cancelled)))+
+  geom_bar(stat="identity", fill="white",colour="black") +
+  facet_wrap(~System,scales="free",ncol=3)+
+  theme_bw()+
+  ggtitle("Same day cancellations over time")+
+  theme(axis.text.x = element_text(angle = 60, hjust = 1))
+
+
+
+# Get only 2023&2023 & auroras & remove cancellations after booking
+usagedata_cancelled<-usagedata_cancelled[grep("Aurora", usagedata_cancelled$System),]
+usagedata_cancelled$Date<-dmy(usagedata_cancelled$Date)
+
+
+
+
+
+usagedata_cancelled<-usagedata_cancelled %>%
+  filter(Date > "2022-12-31", Delta_d_cancelled > 0 )
+head(usagedata_cancelled)
+
+
+
+
+ggplot(usagedata_cancelled, aes(x=Delta_d_cancelled)) +
+  geom_histogram(binwidth=.5, colour="black", fill="white") +
+  facet_wrap(System~Year,scales="free",ncol=2)+
+  xlim(c(0,20))+
+  theme_bw()
+
+ggsave("Distribution ofAurora cancellations 2020-2023.png")
+
+#### Get company and academic accounts
+unique(usagedata$Affiliation)
+unique(usagedata$Group)
+
+usagedata
